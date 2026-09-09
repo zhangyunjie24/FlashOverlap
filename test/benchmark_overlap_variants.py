@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare original and new FlashOverlap tuning on several matrix shapes."""
+"""Compare fast and robust search-policy tuning time and overlap runtime latency across several shapes."""
 
 import argparse
 import json
@@ -141,13 +141,10 @@ def main():
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = "0,1"
     os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
-    sys.path.insert(0, str(TUNE))
     torch.ops.load_library(str(ROOT / "build/lib/libst_pybinding.so"))
-    import search as original_search
 
     if torch.cuda.device_count() < 2:
         raise RuntimeError("at least two visible GPUs are required")
-    sms = torch.cuda.get_device_properties(0).multi_processor_count
     results = []
     original_files = {}
     try:
@@ -164,14 +161,15 @@ def main():
             print("PREPROCESS", label, round(preprocess_s, 3), profile_data["Algo"], flush=True)
 
             variants = []
-            for name, script in (
-                ("original", "search.py"),
-                ("new", "search_conservative_multicandidate.py"),
+            for name, search_policy in (
+                ("fast", "fast"),
+                ("robust", "robust"),
             ):
                 shutil.copy2(profile, config)
                 tune_s, _ = run(
-                    [sys.executable, script, "--m", str(m), "--n", str(n), "--k", str(k),
-                     "--comm_op", args.comm_op, "--predictive_search", "True"],
+                    [sys.executable, "search.py", "--m", str(m), "--n", str(n), "--k", str(k),
+                     "--comm_op", args.comm_op, "--predictive_search", "True",
+                     "--search_policy", search_policy],
                     TUNE,
                     env,
                     logs / f"{label}_{name}_tune.log",
@@ -183,34 +181,19 @@ def main():
                 variants.append((tune_s, config_copy, samples))
                 print(name.upper(), label, round(tune_s, 3), selected(config_copy), flush=True)
 
-            original_s, original_config, original_samples = variants[0]
-            new_s, new_config, new_samples = variants[1]
-            original_mean = statistics.mean(sample["overlap"] for sample in original_samples)
-            new_mean = statistics.mean(sample["overlap"] for sample in new_samples)
-            stability = None
-            if new_mean < original_mean:
-                data = json.loads(new_config.read_text())
-                tiles = original_search.div_up(m, data["BM"]) * original_search.div_up(n, data["BN"])
-                waves = original_search.div_up(tiles, sms - 2)
-                wave_size = original_search.div_up(waves, 10) * (sms - 2)
-                stability = []
-                for _ in range(3):
-                    result = original_search.compute_hint(
-                        m, n, k, data["BM"], data["BN"], data["Algo"], wave_size, args.comm_op
-                    )
-                    stability.append(bool(result[0]))
+            fast_s, fast_config, fast_samples = variants[0]
+            robust_s, robust_config, robust_samples = variants[1]
 
             results.append({
                 "shape": label,
                 "preprocess_s": preprocess_s,
                 "profile_algos": profile_data["Algo"],
-                "original_tune_s": original_s,
-                "new_tune_s": new_s,
-                "original_config": selected(original_config),
-                "new_config": selected(new_config),
-                "original_bench": original_samples,
-                "new_bench": new_samples,
-                "new_strict_stability": stability,
+                "fast_tune_s": fast_s,
+                "robust_tune_s": robust_s,
+                "fast_config": selected(fast_config),
+                "robust_config": selected(robust_config),
+                "fast_bench": fast_samples,
+                "robust_bench": robust_samples,
             })
             (output / "results.json").write_text(json.dumps(results, indent=2))
     finally:
