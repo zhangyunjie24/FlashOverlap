@@ -86,11 +86,6 @@ def compute_hint_process(rank, world_size, nccl_id,
     result_dict):
 
     TileNum = div_up(M, BM) * div_up(N, BN)
-    # TN=1 aliases the monitor global counter with a segment counter in the CUDA kernel.
-    # Tile order is deterministic in this degenerate layout, so skip monitor mode.
-    if div_up(N, BN) == 1:
-        result_dict[rank] = (True, list(range(TileNum)))
-        return
     WaveNum = div_up(TileNum, wSize) 
 
     cSeg = []

@@ -61,7 +61,7 @@ Tile 排序仍然实测。预测函数只估计给定 `cSeg` 下计算与通信�
 ## 实现位置
 
 - `tune/search_conservative_multicandidate.py`：局部保守分组、多 candidate 搜索、校准预测和 Top-2 实测。
-- `tune/search.py`：保留原版搜索，并修复 `TN=1` 时 monitor 全局计数器与分段计数器别名的问题。
+- `tune/search.py`：保留最初的原版搜索实现，作为对照组，不包含本实验的 `TN=1` 绕过。
 - `test/benchmark_overlap_variants.py`：可复用的原版/新版对比脚本。
 - `docs/comprehensive_overlap_results.json`：综合测试原始样本。
 

@@ -9,7 +9,7 @@
 1. **局部保守放置**：稳定 Tile 保留在原 Wave；抖动 Tile 放入其实际观测范围的最后一个 Wave，并排在该 Wave 的稳定 Tile 后面。只延后受影响的 Tile，不把它移动到整个任务末尾，也不淘汰整个 candidate。
 2. **多 candidate 端到端选择**：对裸 GEMM 排名前 10 的 candidate 分别生成独立的 `hint` 和 `cSeg`，实际运行 overlap 后选择延迟最低者，不在第一个稳定 candidate 处停止。
 
-`tune/search.py` 还包含一个独立的小修正：当 `TN = ceil(N / BN) = 1` 时，监控全局计数器会与分段计数器发生别名，因此跳过 monitor 模式并使用确定性的 Tile 顺序。
+原版 `tune/search.py` 与上游实现保持一致。`TN = ceil(N / BN) = 1` 时跳过 monitor 的防护仅保留在实验版 `tune/search_conservative_multicandidate.py` 中，不计入原版对照。
 
 ## 使用方式
 
