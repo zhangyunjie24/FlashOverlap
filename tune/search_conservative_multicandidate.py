@@ -1,5 +1,5 @@
 '''
-    Using multiprocessing for distributed running, 
+    Using multiprocessing for distributed running,
     please specify the GPUs via CUDA_VISIBLE_DEVICES:
         e.g., CUDA_VISIBLE_DEVICES=0,1 python3 search.py --m 4096 --n 8192 --k 4096 --comm_op all_reduce
 '''
@@ -23,13 +23,13 @@ def load_json(M: int, N: int, K: int):
     props = torch.cuda.get_device_properties(device)
     gpu_name = props.name[7:11].lower()
     file_path = f'../configs/m{M}n{N}k{K}_{gpu_name}.json'
-    
+
     assert Path(file_path).exists(), "Please run preprocess.py first!"
-    
+
     # 如果文件存在，加载 JSON 数据
     with open(file_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
-    
+
     return data["BM"], data["BN"], data["dur"], data["Algo"]
 
 def save_solution(M: int, N: int, K: int, BM: int, BN: int, gemm_dur: float, Algo: int, hint: list, cSeg: list):
@@ -37,10 +37,10 @@ def save_solution(M: int, N: int, K: int, BM: int, BN: int, gemm_dur: float, Alg
     props = torch.cuda.get_device_properties(device)
     gpu_name = props.name[7:11].lower()
     file_path = f'../configs/m{M}n{N}k{K}_{gpu_name}.json'
-    
+
     with open(file_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
-    
+
     data["hint"] = hint
     data["cSeg"] = cSeg
     data["rLDN"] = 1
@@ -56,34 +56,34 @@ def generate_row_remap_array(
 ):
     total_tiles = (M * N) // (BM * BN)
     assert sum(S_list) == total_tiles, "sum(S_list) must equal total number of tiles"
-    
+
     original_row_ids = torch.arange(M * N // BN, dtype=torch.int, device=device)
     reordered_row_id = torch.empty_like(original_row_ids)
-    
+
     current_row = 0
     for S in S_list:
         chunk_size = S * BM
         chunk_row_ids = original_row_ids[current_row : current_row + chunk_size]
-        
+
         # Compute row_id % world_size for the current chunk
         mod_values = chunk_row_ids % world_size
-        
+
         # Sort the chunk based on mod_values (stable sort)
         _, sorted_indices = torch.sort(mod_values, stable=True)
         reordered_chunk = chunk_row_ids[sorted_indices]
-        
+
         reordered_row_id[current_row : current_row + chunk_size] = reordered_chunk
         current_row += chunk_size
-    
+
     # Compute remap: remap[original_row_id] = new_row_id
     remap = torch.empty_like(original_row_ids)
     remap[reordered_row_id] = torch.arange(len(reordered_row_id), dtype=torch.int, device=device)
-    
+
     return remap
 
 def compute_hint_process(rank, world_size, nccl_id,
     M: int, N: int, K: int,
-    BM: int, BN: int, Algo: list, wSize: int, comm_op: str, 
+    BM: int, BN: int, Algo: list, wSize: int, comm_op: str,
     result_dict):
 
     TileNum = div_up(M, BM) * div_up(N, BN)
@@ -95,14 +95,14 @@ def compute_hint_process(rank, world_size, nccl_id,
             [], None, [TileNum],
         )
         return
-    WaveNum = div_up(TileNum, wSize) 
+    WaveNum = div_up(TileNum, wSize)
 
     cSeg = []
     for i in range(WaveNum):
         this_seg = min(wSize, TileNum - i * wSize)
         cSeg = cSeg + [this_seg]
 
-    cSeg_CPU = torch.tensor(cSeg, dtype=torch.int32) 
+    cSeg_CPU = torch.tensor(cSeg, dtype=torch.int32)
     cSeg_GPU = cSeg_CPU.cuda(rank)
 
     torch.cuda.set_device(rank)
@@ -131,17 +131,17 @@ def compute_hint_process(rank, world_size, nccl_id,
     if comm_op == "all_reduce":
         for _ in range(_warm_up):
             gemm_class.gemm_allreduce_overlap(A, B, C, MonitoredMatrix, ReorderedArray, 1, cSeg_CPU, cSeg_GPU, Algo, True)
-        
+
         samples = torch.empty((_sample, TileNum), dtype=torch.int, device="cuda")
         for i in range(_sample):
             MonitoredMatrix[0] = 0
             gemm_class.gemm_allreduce_overlap(A, B, C, MonitoredMatrix, ReorderedArray, 1, cSeg_CPU, cSeg_GPU, Algo, True)
             samples[i, :] = MonitoredMatrix[1:, :].view(-1)
-    
+
     elif comm_op == "reduce_scatter":
         for _ in range(_warm_up):
             gemm_class.gemm_reducescatter_overlap(A, B, C, D, MonitoredMatrix, ReorderedArray, RowArray, 1, cSeg_CPU, cSeg_GPU, Algo, True)
-        
+
         samples = torch.empty((_sample, TileNum), dtype=torch.int, device="cuda")
         for i in range(_sample):
             MonitoredMatrix[0] = 0
@@ -245,13 +245,13 @@ def interpolate_latency(samples, x, comm_op):
 
     return latency.item()
 
-def predict_lat(M: int, N: int, gemm_dur: float, 
+def predict_lat(M: int, N: int, gemm_dur: float,
     comm_array: torch.Tensor, gp: list, tile_num: int, comm_op: str):
 
     device = torch.cuda.current_device()
     props = torch.cuda.get_device_properties(device)
     sm_count = props.multi_processor_count
-    
+
     acc_comm_dur = 0
     acc_comp_dur = 0
     iter_num = len(gp)
@@ -269,7 +269,7 @@ def predict_lat(M: int, N: int, gemm_dur: float,
             comm_dur = 0
         else:
             comm_dur = interpolate_latency(comm_array, M*N // tile_num * gp[i - 1], comm_op)
-        acc_comm_dur = max(acc_comp_dur, acc_comm_dur) + comm_dur 
+        acc_comm_dur = max(acc_comp_dur, acc_comm_dur) + comm_dur
         acc_comp_dur += gemm_dur / new_wave_num * ((gp[i] + sm_count - 3) // (sm_count - 2))
     acc_comm_dur = max(acc_comp_dur, acc_comm_dur) + interpolate_latency(comm_array, M*N // tile_num * gp[-1], comm_op)
 
@@ -293,31 +293,31 @@ def predict_overlap_latency(M, N, gemm_dur, comm_array, cseg, tile_num,
 def reorder_indices(S, hint):
     # Generate the original array of indices [0, 1, ..., S-1]
     original = list(range(S))
-    
+
     # Create an empty list to store the new order of indices
     new_order = [-1] * S
-    
+
     # Place the indices of the hint list in the first positions of the new order
     for i, element in enumerate(hint):
         new_order[element] = i
-    
+
     # Place the remaining indices in the new order
     remaining_elements = [x for x in original if x not in hint]
     for i, element in enumerate(remaining_elements, start=len(hint)):
         new_order[element] = i
-    
+
     return torch.tensor(new_order, dtype=torch.int, device="cuda")
 
 def perf_running_process(rank, world_size, nccl_id,
     M: int, N: int, K: int,
-    BM: int, BN: int, Algo: int, cSeg: list, hint: list, 
+    BM: int, BN: int, Algo: int, cSeg: list, hint: list,
     comm_op: str,
     result_dict):
 
-    cSeg_CPU = torch.tensor(cSeg, dtype=torch.int32) 
+    cSeg_CPU = torch.tensor(cSeg, dtype=torch.int32)
     cSeg_GPU = cSeg_CPU.cuda(rank)
 
-    TileNum = div_up(M, BM) * div_up(N, BN) 
+    TileNum = div_up(M, BM) * div_up(N, BN)
 
     torch.cuda.set_device(rank)
 
@@ -337,7 +337,7 @@ def perf_running_process(rank, world_size, nccl_id,
     if comm_op == "reduce_scatter":
         D = torch.empty((M // world_size, N), dtype=torch.float16, device="cuda")
         RowArray = generate_row_remap_array(M, N, BM, BN, cSeg, world_size)
-    
+
     _warm_up = 20
     _freq = 200
 
@@ -402,9 +402,9 @@ def perf_running_process(rank, world_size, nccl_id,
             dur = torch.zeros((_freq))
 
     result_dict[rank] = torch.mean(dur).item()
-    
-def perf_running(M: int, N: int, K: int, 
-    BM: int, BN: int, Algo: int, 
+
+def perf_running(M: int, N: int, K: int,
+    BM: int, BN: int, Algo: int,
     cSeg: list, hint: list, comm_op: str):
     world_size = torch.cuda.device_count()
     if world_size < 2:
@@ -489,7 +489,7 @@ def exhaustive_search(M: int, N: int, K: int, comm_op: str):
         if dur < min_dur:
             min_dur = dur
             cSeg = gp
-        
+
     print("Best solution: ", cSeg)
     save_solution(M, N, K, BM, BN, gemm_dur, Algo, hint, cSeg)
     print("Solution saved.")
